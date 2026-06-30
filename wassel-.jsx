@@ -3,7 +3,7 @@ import {
   ShoppingBag, Truck, CreditCard, Wallet, Banknote, Smartphone, Bitcoin,
   Copy, Check, ArrowRight, Sparkles, MapPin, Clock, Gift, Users, Star,
   X, Loader2, ShieldCheck, Info, RotateCcw, Heart, MessageCircle, Send,
-  Flame, TrendingUp, BadgePercent, ChevronRight,
+  Flame, TrendingUp, BadgePercent, ChevronRight, Package,
 } from 'lucide-react';
 
 const TND_PER_EUR = 4.8;
@@ -68,6 +68,30 @@ const PAY_METHODS = [
 ];
 
 const TRACK_STAGES = ['Ordered','Processing','Shipped','Customs','Out for delivery','Delivered'];
+
+const ORIGIN_BY_PLATFORM = {
+  shein: 'Guangzhou, China',
+  temu: 'Shenzhen, China',
+  aliexpress: 'Hangzhou, China',
+};
+const DEST_CITY = 'Tunis, Tunisia';
+// route waypoints as % position along the map path, one per TRACK_STAGES index
+const ROUTE_POINTS = [
+  { x: 14, y: 30 },  // Ordered — origin warehouse
+  { x: 14, y: 30 },  // Processing — still origin
+  { x: 38, y: 18 },  // Shipped — in transit, air/sea hub
+  { x: 62, y: 46 },  // Customs — regional hub
+  { x: 82, y: 58 },  // Out for delivery — local depot
+  { x: 90, y: 64 },  // Delivered — destination
+];
+const STAGE_CITY = (platform, i) => {
+  if (i === 0) return ORIGIN_BY_PLATFORM[platform] || 'Origin warehouse';
+  if (i === 1) return ORIGIN_BY_PLATFORM[platform] || 'Origin warehouse';
+  if (i === 2) return 'International transit hub';
+  if (i === 3) return 'Tunis customs facility';
+  if (i === 4) return 'Local delivery depot, Tunis';
+  return DEST_CITY;
+};
 const VIP = [{ name:'Bronze', min:0 },{ name:'Silver', min:500 },{ name:'Gold', min:2000 },{ name:'Platinum', min:5000 }];
 const SCAN = ['Reading your link','Detecting platform','Scanning cart items','Estimating weight','Calculating shipping & customs'];
 const STEPS = ['input','scanning','manifest','ticket','payment','confirmed'];
@@ -253,7 +277,56 @@ function CostRow({label,sub,eur:e,tndV,muted,accent}) {
   );
 }
 
-/* ── App ─────────────────────────────────────────────── */
+function ShipmentMap({ platform, stage, eta }) {
+  const pos = ROUTE_POINTS[Math.min(stage, ROUTE_POINTS.length - 1)];
+  const city = STAGE_CITY(platform, Math.min(stage, ROUTE_POINTS.length - 1));
+  const pathD = `M ${ROUTE_POINTS[0].x} ${ROUTE_POINTS[0].y} ` +
+    ROUTE_POINTS.slice(1).map(p => `L ${p.x} ${p.y}`).join(' ');
+  const travelledD = `M ${ROUTE_POINTS[0].x} ${ROUTE_POINTS[0].y} ` +
+    ROUTE_POINTS.slice(1, stage + 1).map(p => `L ${p.x} ${p.y}`).join(' ');
+  const today = new Date(TODAY);
+  const daysLeft = Math.max(0, Math.ceil((eta - today) / 86400000));
+
+  return (
+    <div className="shipmap-card">
+      <div className="shipmap-top">
+        <div>
+          <div className="fl">Current location</div>
+          <div className="shipmap-city"><MapPin size={15}/> {city}</div>
+        </div>
+        <div className="shipmap-eta">
+          <div className="fl" style={{textAlign:'right'}}>Estimated arrival</div>
+          <div className="shipmap-eta-date">{eta.toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'})}</div>
+          <div className="ty" style={{textAlign:'right'}}>{daysLeft===0?'Arriving today':`${daysLeft} day${daysLeft===1?'':'s'} left`}</div>
+        </div>
+      </div>
+
+      <svg viewBox="0 0 100 80" className="shipmap-svg" preserveAspectRatio="none">
+        <path d={pathD} fill="none" stroke="var(--ln)" strokeWidth="1.2" strokeDasharray="2.2 2.2" strokeLinecap="round"/>
+        <path d={travelledD} fill="none" stroke="var(--gr)" strokeWidth="1.4" strokeLinecap="round"/>
+        {ROUTE_POINTS.map((p, i) => (
+          <circle key={i} cx={p.x} cy={p.y} r={i<=stage?1.6:1.2}
+            fill={i<stage?'var(--gr)':i===stage?'var(--go)':'var(--ln)'}
+            stroke="#fff" strokeWidth="0.5" />
+        ))}
+        <g transform={`translate(${pos.x} ${pos.y})`}>
+          <circle r="3.2" fill="var(--go)" opacity="0.22">
+            <animate attributeName="r" values="3.2;5.2;3.2" dur="1.8s" repeatCount="indefinite"/>
+            <animate attributeName="opacity" values="0.3;0.05;0.3" dur="1.8s" repeatCount="indefinite"/>
+          </circle>
+          <circle r="1.9" fill="var(--go)" stroke="#fff" strokeWidth="0.6"/>
+        </g>
+      </svg>
+
+      <div className="shipmap-route-labels">
+        <span><Package size={11}/> {ORIGIN_BY_PLATFORM[platform] || 'Origin'}</span>
+        <span>{DEST_CITY} <MapPin size={11}/></span>
+      </div>
+    </div>
+  );
+}
+
+
 export default function App() {
   const [acc,setAcc]=useState(null);
   const [gName,setGName]=useState(''); const [gEmail,setGEmail]=useState(''); const [gErr,setGErr]=useState('');
@@ -392,13 +465,17 @@ export default function App() {
         --rs:#C9707A;--bl:#3A8DE2;
         --s1:0 2px 8px rgba(0,0,0,.06);--s2:0 8px 24px rgba(0,0,0,.09);--s3:0 20px 50px rgba(0,0,0,.13);
         --fd:'Outfit',sans-serif;--fb:'Inter',-apple-system,sans-serif;--fm:'JetBrains Mono',monospace;
-        background:var(--bg);color:var(--ink);font-family:var(--fb);min-height:100vh;padding-bottom:80px;
+        background:
+          radial-gradient(ellipse 900px 500px at 15% -5%, rgba(14,107,79,0.07), transparent 60%),
+          radial-gradient(ellipse 700px 500px at 100% 10%, rgba(201,150,43,0.08), transparent 55%),
+          var(--bg);
+        color:var(--ink);font-family:var(--fb);min-height:100vh;padding-bottom:80px;
       }
 
       /* topbar */
       .topbar{display:flex;align-items:center;justify-content:space-between;padding:20px 24px 12px;max-width:940px;margin:0 auto;}
       .brand{display:flex;align-items:center;gap:12px;}
-      .bmark{position:relative;width:42px;height:42px;border-radius:14px;background:linear-gradient(135deg,var(--gr),var(--grd));display:flex;align-items:center;justify-content:center;box-shadow:0 6px 16px rgba(14,107,79,.3);flex-shrink:0;}
+      .bmark{position:relative;width:42px;height:42px;border-radius:14px;background:linear-gradient(135deg,var(--gr),var(--grd));display:flex;align-items:center;justify-content:center;box-shadow:0 6px 16px rgba(14,107,79,.3), inset 0 1px 0 rgba(255,255,255,.25);flex-shrink:0;}
       .bdot{position:absolute;top:-4px;right:-4px;width:13px;height:13px;border-radius:50%;background:var(--go);border:2.5px solid var(--bg);}
       .bname{font-family:var(--fd);font-size:21px;font-weight:800;letter-spacing:-.01em;color:var(--ink);}
       .btag{font-size:11.5px;color:var(--soft);margin-top:2px;}
@@ -548,6 +625,17 @@ export default function App() {
       .ptb{display:flex;align-items:center;gap:10px;}
       .ptn{font-family:var(--fm);font-size:26px;font-weight:800;color:var(--go);}
       .rcard{background:var(--sur);border:1px solid var(--ln);border-radius:16px;padding:18px;margin-top:18px;box-shadow:var(--s1);}
+
+      /* shipment map */
+      .shipmap-card{background:var(--sur);border:1px solid var(--ln);border-radius:20px;padding:20px 22px;margin-top:18px;box-shadow:var(--s2);}
+      .shipmap-top{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:16px;flex-wrap:wrap;gap:12px;}
+      .shipmap-city{display:flex;align-items:center;gap:6px;font-family:var(--fd);font-weight:700;font-size:17px;color:var(--ink);}
+      .shipmap-city svg{color:var(--go);flex-shrink:0;}
+      .shipmap-eta{text-align:right;}
+      .shipmap-eta-date{font-family:var(--fm);font-weight:800;font-size:18px;color:var(--grd);}
+      .shipmap-svg{width:100%;height:150px;display:block;background:linear-gradient(180deg,var(--grt) 0%,var(--sur2) 100%);border-radius:14px;margin-bottom:10px;}
+      .shipmap-route-labels{display:flex;justify-content:space-between;font-size:11px;color:var(--soft);font-weight:600;}
+      .shipmap-route-labels span{display:flex;align-items:center;gap:5px;}
       .rlrow{display:flex;gap:8px;margin-top:10px;}
       .rll{flex:1;background:var(--sur2);border:1px solid var(--ln);padding:10px 12px;border-radius:10px;font-family:var(--fm);font-size:12.5px;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
       .fa{display:flex;gap:10px;margin-top:26px;flex-wrap:wrap;}
@@ -971,6 +1059,8 @@ export default function App() {
               <div className="srow2"><Star size={13}/> {tnd(order.T.fTND)} paid</div>
             </div>
           </div>
+
+          <ShipmentMap platform={order.platform.toLowerCase()==='shein'?'shein':order.platform.toLowerCase()==='temu'?'temu':'aliexpress'} stage={track} eta={order.T.eta}/>
 
           <div className="rcard">
             <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}>
