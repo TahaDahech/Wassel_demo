@@ -125,6 +125,36 @@ const STORE_CATS = [
   { id:'tech', label:'Tech' },{ id:'beauty', label:'Beauty' },{ id:'coupon', label:'Coupons' },
 ];
 
+/* ── Print Shop (separate from the points-based rewards store — these are
+   real, paid, custom-printed items, priced in TND) ── */
+const PRINT_BLANKS = {
+  tshirt: { label:'T-Shirt', img: PX(8408556), basePriceTND: 39 },
+  hoodie: { label:'Hoodie', img: PX(8159428), basePriceTND: 69 },
+  mug:    { label:'Mug', img: PX(3737800), basePriceTND: 25 },
+  case:   { label:'Phone Case', img: PX(33298188), basePriceTND: 29 },
+};
+
+const PRINT_THEMES = [
+  { id:'all', label:'All themes' },
+  { id:'anime', label:'Anime-Inspired' },
+  { id:'tv', label:'TV & Streaming' },
+  { id:'gaming', label:'Gaming' },
+  { id:'original', label:'Original Art' },
+];
+
+const PRINT_CATALOG = [
+  { id:'p1', name:'Shonen Hero Silhouette Tee', cat:'tshirt', theme:'anime', priceTND:42 },
+  { id:'p2', name:'Mecha Pilot Hoodie', cat:'hoodie', theme:'anime', priceTND:72 },
+  { id:'p3', name:'Late Night Static Tee', cat:'tshirt', theme:'tv', priceTND:40 },
+  { id:'p4', name:'Binge Mode Mug', cat:'mug', theme:'tv', priceTND:26 },
+  { id:'p5', name:'Pixel Boss Fight Hoodie', cat:'hoodie', theme:'gaming', priceTND:75 },
+  { id:'p6', name:'Respawn Phone Case', cat:'case', theme:'gaming', priceTND:30 },
+  { id:'p7', name:'Streetwear Geometry Tee', cat:'tshirt', theme:'original', priceTND:38 },
+  { id:'p8', name:'Minimal Skyline Mug', cat:'mug', theme:'original', priceTND:25 },
+  { id:'p9', name:'Retro Console Tee', cat:'tshirt', theme:'gaming', priceTND:41 },
+  { id:'p10', name:'Studio Sketch Hoodie', cat:'hoodie', theme:'anime', priceTND:74 },
+];
+
 const AI_SUGGESTIONS = [
   'Why is my customs estimate non-zero?',
   'How do I earn more loyalty points?',
@@ -136,6 +166,14 @@ const MOCK_REFS = [
   { name:'Salma B.', status:'ordered', pts:200 },
   { name:'Karim T.', status:'joined', pts:0 },
   { name:'Ines M.', status:'ordered', pts:200 },
+];
+
+const GARMENT_COLORS = [
+  { id:'white', label:'White', hex:'#FFFFFF' },
+  { id:'black', label:'Black', hex:'#1C201C' },
+  { id:'sand',  label:'Sand', hex:'#D8CDB5' },
+  { id:'forest',label:'Forest', hex:'#214B3B' },
+  { id:'rose',  label:'Rose', hex:'#C9707A' },
 ];
 
 /* ── helpers ─────────────────────────────────────────── */
@@ -232,6 +270,60 @@ function tierFor(s){
   return {cur, next:VIP[idx+1]||null};
 }
 
+/* Procedural "AI design" generator — draws a unique abstract pattern onto a
+   canvas seeded from the prompt text. This is a deterministic stand-in for
+   real image generation (no image-generation API is wired into this demo);
+   it always produces something, fast, with no external calls. */
+function paintAIPattern(canvas, prompt) {
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  const seed = hashSeed(prompt || 'wassel');
+  const r = rng32(seed);
+  const palettes = [
+    ['#0E6B4F','#C9962B','#F7F5F0'],
+    ['#3A8DE2','#1C201C','#FBF2DF'],
+    ['#C9707A','#1C201C','#F7F5F0'],
+    ['#E2A53A','#0E6B4F','#1C201C'],
+    ['#E0577A','#3A8DE2','#F7F5F0'],
+  ];
+  const pal = palettes[Math.floor(r()*palettes.length)];
+  ctx.clearRect(0,0,W,H);
+  ctx.fillStyle = pal[2];
+  ctx.fillRect(0,0,W,H);
+
+  const shapeCount = 5 + Math.floor(r()*6);
+  for (let i=0;i<shapeCount;i++) {
+    const kind = r();
+    ctx.globalAlpha = 0.55 + r()*0.4;
+    ctx.fillStyle = pal[Math.floor(r()*2)];
+    const cx = r()*W, cy = r()*H, size = W*(0.12+r()*0.3);
+    if (kind < 0.34) {
+      ctx.beginPath(); ctx.arc(cx, cy, size/2, 0, Math.PI*2); ctx.fill();
+    } else if (kind < 0.67) {
+      ctx.save(); ctx.translate(cx,cy); ctx.rotate(r()*Math.PI);
+      ctx.fillRect(-size/2,-size/2,size,size); ctx.restore();
+    } else {
+      ctx.beginPath();
+      ctx.moveTo(cx, cy-size/2);
+      ctx.lineTo(cx+size/2, cy+size/2);
+      ctx.lineTo(cx-size/2, cy+size/2);
+      ctx.closePath(); ctx.fill();
+    }
+  }
+  ctx.globalAlpha = 1;
+
+  // a few connecting strokes for cohesion
+  ctx.strokeStyle = pal[1]; ctx.lineWidth = Math.max(2, W*0.01); ctx.globalAlpha = 0.7;
+  for (let i=0;i<3;i++) {
+    ctx.beginPath();
+    ctx.moveTo(r()*W, r()*H);
+    ctx.lineTo(r()*W, r()*H);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+  return canvas.toDataURL('image/png');
+}
+
 /* ── tiny components ─────────────────────────────────── */
 function Spark({pts}) {
   const w=56,h=18;
@@ -326,6 +418,254 @@ function ShipmentMap({ platform, stage, eta }) {
   );
 }
 
+/* ── Print Shop: themed catalog + custom Design Studio ──────────────── */
+function PrintShopPage({ onPlaceOrder }) {
+  const [tab, setTab] = useState('catalog');
+  const [themeFilter, setThemeFilter] = useState('all');
+  const [catFilter, setCatFilter] = useState('all');
+
+  // studio state
+  const [product, setProduct] = useState('tshirt');
+  const [color, setColor] = useState('white');
+  const [mode, setMode] = useState('upload'); // 'upload' | 'ai'
+  const [uploadedSrc, setUploadedSrc] = useState(null);
+  const [aiPrompt, setAiPrompt] = useState('');
+  const [aiBusy, setAiBusy] = useState(false);
+  const [designSrc, setDesignSrc] = useState(null);
+  const [tf, setTf] = useState({ x: 50, y: 42, scale: 1, rotate: 0 }); // percent-based position
+  const [dragging, setDragging] = useState(false);
+  const fileRef = useRef(null);
+  const aiCanvasRef = useRef(null);
+  const mockupRef = useRef(null);
+  const [pay, setPay] = useState(null);
+  const [placed, setPlaced] = useState(false);
+
+  const blank = PRINT_BLANKS[product];
+  const price = blank.basePriceTND + (designSrc ? 0 : 0);
+
+  const openCustomize = (catItem) => {
+    setProduct(catItem.cat);
+    setTab('studio');
+  };
+
+  const handleUpload = (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      setUploadedSrc(reader.result);
+      setDesignSrc(reader.result);
+      setMode('upload');
+      setTf({ x: 50, y: 42, scale: 1, rotate: 0 });
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleGenerateAI = () => {
+    if (!aiPrompt.trim() || aiBusy) return;
+    setAiBusy(true);
+    setTimeout(() => {
+      const canvas = aiCanvasRef.current;
+      if (canvas) {
+        const url = paintAIPattern(canvas, aiPrompt.trim());
+        setDesignSrc(url);
+        setMode('ai');
+        setTf({ x: 50, y: 42, scale: 1, rotate: 0 });
+      }
+      setAiBusy(false);
+    }, 700); // small delay so it reads as "generating"
+  };
+
+  const onMockDown = (e) => {
+    if (!designSrc) return;
+    setDragging(true);
+  };
+  const onMockMove = (e) => {
+    if (!dragging || !mockupRef.current) return;
+    const rect = mockupRef.current.getBoundingClientRect();
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+    const x = Math.min(82, Math.max(18, ((clientX - rect.left) / rect.width) * 100));
+    const y = Math.min(78, Math.max(20, ((clientY - rect.top) / rect.height) * 100));
+    setTf((t) => ({ ...t, x, y }));
+  };
+  const onMockUp = () => setDragging(false);
+
+  const doPlaceCustomOrder = () => {
+    if (!designSrc || !pay) return;
+    onPlaceOrder({ name: `Custom ${blank.label} (${color})`, priceTND: price });
+    setPlaced(true);
+    setTimeout(() => setPlaced(false), 3000);
+    setPay(null);
+  };
+
+  const catalogFiltered = PRINT_CATALOG.filter(
+    (i) => (themeFilter === 'all' || i.theme === themeFilter) && (catFilter === 'all' || i.cat === catFilter)
+  );
+
+  return (
+    <div>
+      <div className="ey">Print Shop</div>
+      <h2 className="ht" style={{ fontSize: 28 }}>Wear your own designs</h2>
+      <p className="hs">Browse themed tees, hoodies, mugs and tech accessories, or design your own with the Studio. These are real, paid items — separate from the points-based rewards store.</p>
+
+      <div className="tabs" style={{ padding: '0 0 18px', margin: 0 }}>
+        <button className={`tab ${tab === 'catalog' ? 'on' : ''}`} onClick={() => setTab('catalog')}>Catalog</button>
+        <button className={`tab ${tab === 'studio' ? 'on' : ''}`} onClick={() => setTab('studio')}>Design Studio <Sparkles size={12} style={{ marginLeft: 4 }} /></button>
+      </div>
+
+      {tab === 'catalog' && (
+        <>
+          <div className="sfrow">
+            {PRINT_THEMES.map((t) => (
+              <Chip key={t.id} active={themeFilter === t.id} onClick={() => setThemeFilter(t.id)}>{t.label}</Chip>
+            ))}
+          </div>
+          <div className="sfrow" style={{ marginTop: -8 }}>
+            {Object.entries(PRINT_BLANKS).map(([id, b]) => (
+              <Chip key={id} active={catFilter === id} onClick={() => setCatFilter(catFilter === id ? 'all' : id)}>{b.label}</Chip>
+            ))}
+          </div>
+
+          <div className="sgrd">
+            {catalogFiltered.map((item) => {
+              const b = PRINT_BLANKS[item.cat];
+              return (
+                <div className="ssc" key={item.id}>
+                  <div className="spw">
+                    <Img src={b.img} alt={item.name} className="sph" />
+                    <span className="scpill">{PRINT_THEMES.find((t) => t.id === item.theme)?.label}</span>
+                  </div>
+                  <div className="scb">
+                    <div className="pn">{item.name}</div>
+                    <div className="scost" style={{ color: 'var(--gr)' }}>{tnd(item.priceTND)}</div>
+                    <button className="btn-p sbtn" onClick={() => openCustomize(item)}>Customize this <ArrowRight size={14} /></button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
+
+      {tab === 'studio' && (
+        <div className="studio-wrap">
+          <div className="studio-controls">
+            <div className="scard-l" style={{ marginTop: 0 }}>
+              <div className="scard-lh"><ShoppingBag size={16} color="#0E6B4F" /><b>1. Pick a product</b></div>
+              <div className="srow" style={{ marginTop: 0 }}>
+                {Object.entries(PRINT_BLANKS).map(([id, b]) => (
+                  <Chip key={id} active={product === id} onClick={() => setProduct(id)}>{b.label}</Chip>
+                ))}
+              </div>
+              <div className="ty" style={{ marginTop: 10 }}>Base price: <b style={{ color: 'var(--ink)' }}>{tnd(blank.basePriceTND)}</b></div>
+            </div>
+
+            <div className="scard-l">
+              <div className="scard-lh"><Sparkles size={16} color="#C9962B" /><b>2. Pick a color</b></div>
+              <div className="color-row">
+                {GARMENT_COLORS.map((c) => (
+                  <button key={c.id} className={`color-dot ${color === c.id ? 'on' : ''}`} style={{ background: c.hex }} onClick={() => setColor(c.id)} title={c.label} />
+                ))}
+              </div>
+            </div>
+
+            <div className="scard-l">
+              <div className="scard-lh"><MessageCircle size={16} color="#3A8DE2" /><b>3. Add your design</b></div>
+              <div className="srow" style={{ marginTop: 0, marginBottom: 12 }}>
+                <Chip active={mode === 'upload'} onClick={() => setMode('upload')}>Upload a photo</Chip>
+                <Chip active={mode === 'ai'} onClick={() => setMode('ai')}>Generate with AI</Chip>
+              </div>
+
+              {mode === 'upload' && (
+                <div>
+                  <input ref={fileRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={handleUpload} />
+                  <button className="btn-gh" style={{ width: '100%', justifyContent: 'center' }} onClick={() => fileRef.current && fileRef.current.click()}>
+                    Choose an image…
+                  </button>
+                  <div className="ty" style={{ marginTop: 8 }}>JPG or PNG. Drag the design on the mockup to position it, then use the sliders to scale and rotate.</div>
+                </div>
+              )}
+
+              {mode === 'ai' && (
+                <div>
+                  <input className="lnk" style={{ width: '100%' }} placeholder="Describe what you want printed… e.g. 'minimal mountain line art'"
+                    value={aiPrompt} onChange={(e) => setAiPrompt(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') handleGenerateAI(); }} />
+                  <button className="btn-p" style={{ width: '100%', justifyContent: 'center', marginTop: 10 }} disabled={!aiPrompt.trim() || aiBusy} onClick={handleGenerateAI}>
+                    {aiBusy ? <><Loader2 size={15} className="spin" /> Generating…</> : <><Sparkles size={15} /> Generate design</>}
+                  </button>
+                  <canvas ref={aiCanvasRef} width="400" height="400" style={{ display: 'none' }} />
+                  <div className="ty" style={{ marginTop: 8 }}>Demo generator: produces a unique abstract pattern from your prompt instantly, with no external calls. Wiring up a real image-generation model would replace this with true text-to-image art.</div>
+                </div>
+              )}
+
+              {designSrc && (
+                <div style={{ marginTop: 16 }}>
+                  <div className="ty">Scale</div>
+                  <input type="range" min="0.4" max="2.2" step="0.05" value={tf.scale} onChange={(e) => setTf((t) => ({ ...t, scale: parseFloat(e.target.value) }))} style={{ width: '100%' }} />
+                  <div className="ty">Rotate</div>
+                  <input type="range" min="-45" max="45" step="1" value={tf.rotate} onChange={(e) => setTf((t) => ({ ...t, rotate: parseFloat(e.target.value) }))} style={{ width: '100%' }} />
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="studio-preview">
+            <div className="mockup-card" style={{ background: GARMENT_COLORS.find((c) => c.id === color)?.hex }}>
+              <div
+                className="mockup-area"
+                ref={mockupRef}
+                onMouseDown={onMockDown} onMouseMove={onMockMove} onMouseUp={onMockUp} onMouseLeave={onMockUp}
+                onTouchStart={onMockDown} onTouchMove={onMockMove} onTouchEnd={onMockUp}
+              >
+                <Img src={blank.img} alt={blank.label} className="mockup-garment" />
+                {designSrc && (
+                  <img
+                    src={designSrc}
+                    alt="Your design"
+                    className="mockup-design"
+                    style={{
+                      left: `${tf.x}%`, top: `${tf.y}%`,
+                      transform: `translate(-50%,-50%) scale(${tf.scale}) rotate(${tf.rotate}deg)`,
+                      cursor: dragging ? 'grabbing' : 'grab',
+                    }}
+                    draggable={false}
+                  />
+                )}
+                {!designSrc && <div className="mockup-empty">Upload or generate a design to preview it here</div>}
+              </div>
+            </div>
+            <div className="ty" style={{ textAlign: 'center', marginTop: 8 }}>{blank.label} · {GARMENT_COLORS.find((c) => c.id === color)?.label}</div>
+
+            <div className="recap" style={{ marginTop: 16 }}>
+              <div className="rrow"><span>Item</span><b>Custom {blank.label}</b></div>
+              <div className="rrow"><span>Price</span><b>{tnd(price)}</b></div>
+            </div>
+
+            <div className="pgrid" style={{ marginTop: 0 }}>
+              {PAY_METHODS.slice(0, 4).map((m) => {
+                const Icon = m.icon; const sel = pay === m.id;
+                return (
+                  <button key={m.id} className={`pcard ${sel ? 'on' : ''}`} onClick={() => setPay(m.id)}>
+                    <div className="pic"><Icon size={16} /></div>
+                    <div className="plb">{m.label}</div>
+                    {sel && <Check size={16} className="pch" />}
+                  </button>
+                );
+              })}
+            </div>
+
+            <button className="btn-p" style={{ width: '100%', justifyContent: 'center', marginTop: 12 }} disabled={!designSrc || !pay} onClick={doPlaceCustomOrder}>
+              Place custom order — {tnd(price)} <ArrowRight size={16} />
+            </button>
+            {placed && <div className="promo" style={{ marginTop: 12 }}><Check size={15} /> Custom order placed! Find it in your order history.</div>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 
 export default function App() {
   const [acc,setAcc]=useState(null);
@@ -405,6 +745,13 @@ export default function App() {
   };
 
   const doReset=()=>{setStep('input');setLink('');setAna(null);setPay(null);setOrder(null);setErr('');setSpeed('standard');};
+
+  const doPlaceCustomOrder=({name, priceTND})=>{
+    const wb=waybill(hashSeed(name+Date.now()),orders.length);
+    setOrders(p=>[{id:wb,platform:'Print Shop',tTND:priceTND,status:'Processing'},...p]);
+    setSpendTND(s=>s+priceTND);
+    setPts(p=>p+Math.round(priceTND));
+  };
 
   const toggleWish=(e)=>setWish(p=>p.find(w=>w.id===e.id)?p.filter(w=>w.id!==e.id):[...p,e]);
 
@@ -676,6 +1023,25 @@ export default function App() {
       .scost{display:flex;align-items:center;gap:5px;font-family:var(--fm);font-weight:800;font-size:14px;color:var(--go);margin:6px 0 10px;}
       .sbtn{width:100%;justify-content:center;padding:10px;font-size:13px;}
 
+      /* design studio */
+      .studio-wrap{display:grid;grid-template-columns:1fr 1fr;gap:22px;align-items:start;}
+      .studio-controls{display:flex;flex-direction:column;}
+      .studio-preview{position:sticky;top:18px;}
+      .color-row{display:flex;gap:10px;}
+      .color-dot{width:30px;height:30px;border-radius:50%;border:2px solid var(--ln);cursor:pointer;box-shadow:var(--s1);transition:transform .12s;}
+      .color-dot:hover{transform:scale(1.08);}
+      .color-dot.on{border-color:var(--gr);box-shadow:0 0 0 3px var(--grt);}
+      .mockup-card{border-radius:20px;padding:26px;box-shadow:var(--s2);border:1px solid var(--ln);transition:background .2s;}
+      .mockup-area{position:relative;aspect-ratio:1;border-radius:14px;overflow:hidden;background:rgba(255,255,255,0.5);user-select:none;touch-action:none;}
+      .mockup-garment{width:100%;height:100%;object-fit:cover;opacity:0.9;pointer-events:none;mix-blend-mode:multiply;}
+      .mockup-design{position:absolute;width:42%;max-width:42%;border-radius:8px;box-shadow:0 4px 14px rgba(0,0,0,0.25);}
+      .mockup-empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;padding:20px;font-size:12.5px;color:var(--soft);font-weight:600;}
+
+      @media(max-width:720px){
+        .studio-wrap{grid-template-columns:1fr;}
+        .studio-preview{position:static;}
+      }
+
       /* loyalty */
       .lhero{display:flex;align-items:center;justify-content:space-between;background:linear-gradient(135deg,var(--gr),var(--grd));border-radius:20px;padding:22px 24px;color:#fff;box-shadow:var(--s3);}
       .lhero .fl{color:rgba(255,255,255,.7);}
@@ -758,12 +1124,18 @@ export default function App() {
       <div className="tabs">
         <button className={`tab ${page==='calc'?'on':''}`} onClick={()=>setPage('calc')}>Calculator</button>
         <button className={`tab ${page==='store'?'on':''}`} onClick={()=>setPage('store')}>Rewards store</button>
+        <button className={`tab ${page==='print'?'on':''}`} onClick={()=>setPage('print')}>Print Shop</button>
         <button className={`tab ${page==='loyalty'?'on':''}`} onClick={()=>setPage('loyalty')}>Loyalty & Referrals</button>
       </div>
 
       {page==='calc' && <Dots cur={step}/>}
 
       <div className="stage">
+
+        {/* ── PRINT SHOP page ── */}
+        {page==='print' && (
+          <PrintShopPage onPlaceOrder={doPlaceCustomOrder} />
+        )}
 
         {/* ── STORE page ── */}
         {page==='store' && <>
